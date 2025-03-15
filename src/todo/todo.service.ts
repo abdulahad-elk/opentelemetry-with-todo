@@ -1,15 +1,15 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Todo } from './entities/todo.entity';
 import { CreateTodoDto } from './dto/create-todo.dto';
 import { v4 as uuidv4 } from 'uuid';
-import { Trace } from '../common/decorators/trace.decorator';
+import { TraceMethod } from '../common/decorators/trace.decorator';
 
 @Injectable()
 export class TodoService {
   private todos: Todo[] = [];
   private readonly logger = new Logger(TodoService.name);
 
-  @Trace('TodoService.create')
+  @TraceMethod('TodoService.create')
   create(createTodoDto: CreateTodoDto): Todo {
     const id = uuidv4();
     const todo = new Todo({
@@ -22,21 +22,25 @@ export class TodoService {
     return todo;
   }
 
-  @Trace('TodoService.findAll')
+  @TraceMethod('TodoService.findAll')
   findAll(): Todo[] {
     return this.todos;
   }
 
-  @Trace('TodoService.findOne')
-  findOne(id: string): Todo | undefined {
-    return this.todos.find((todo) => todo.id === id);
+  @TraceMethod('TodoService.findOne')
+  findOne(id: string): Todo {
+    const todo = this.todos.find((todo) => todo.id === id);
+    if (!todo) {
+      throw new NotFoundException(`Todo with ID ${id} not found`);
+    }
+    return todo;
   }
 
-  @Trace('TodoService.update')
-  update(id: string, updateData: Partial<Todo>): Todo | undefined {
+  @TraceMethod('TodoService.update')
+  update(id: string, updateData: Partial<Todo>): Todo {
     const todoIndex = this.todos.findIndex((todo) => todo.id === id);
     if (todoIndex === -1) {
-      return undefined;
+      throw new NotFoundException(`Todo with ID ${id} not found`);
     }
 
     const updatedTodo = new Todo({
@@ -48,10 +52,13 @@ export class TodoService {
     return updatedTodo;
   }
 
-  @Trace('TodoService.remove')
+  @TraceMethod('TodoService.remove')
   remove(id: string): boolean {
     const initialLength = this.todos.length;
     this.todos = this.todos.filter((todo) => todo.id !== id);
-    return initialLength > this.todos.length;
+    if (initialLength === this.todos.length) {
+      throw new NotFoundException(`Todo with ID ${id} not found`);
+    }
+    return true;
   }
 }

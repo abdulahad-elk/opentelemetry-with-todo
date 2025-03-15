@@ -2,21 +2,25 @@ import { NodeSDK } from '@opentelemetry/sdk-node';
 import { Resource } from '@opentelemetry/resources';
 import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
-import { TraceExporter } from '@google-cloud/opentelemetry-cloud-trace-exporter';
+import { JaegerExporter } from '@opentelemetry/exporter-jaeger';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 
-// Configure the SDK with GCP Trace Exporter
-export async function createOpenTelemetrySDK() {
+// Configure the SDK with Jaeger Exporter
+export async function createOpenTelemetrySDK(): Promise<NodeSDK> {
+  const exporter = new JaegerExporter({
+    endpoint: 'http://localhost:14268/api/traces',
+  });
+
   const sdk = new NodeSDK({
     resource: new Resource({
       [SemanticResourceAttributes.SERVICE_NAME]: 'nestjs-todo-app',
       [SemanticResourceAttributes.SERVICE_VERSION]: '1.0.0',
     }),
-    traceExporter: new TraceExporter(),
+    spanProcessor: new BatchSpanProcessor(exporter),
     instrumentations: [
       getNodeAutoInstrumentations({
-        // Add specific instrumentation configuration here
         '@opentelemetry/instrumentation-fs': {
-          enabled: false, // Disable file system instrumentation to reduce noise
+          enabled: false,
         },
       }),
     ],

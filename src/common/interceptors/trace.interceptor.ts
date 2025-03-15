@@ -4,10 +4,17 @@ import {
   ExecutionContext,
   CallHandler,
   Logger,
+  HttpException,
 } from '@nestjs/common';
-import { Observable } from 'rxjs';
-import { tap } from 'rxjs/operators';
-import { trace, context, SpanStatusCode } from '@opentelemetry/api';
+import { Observable, throwError } from 'rxjs';
+import { tap, catchError } from 'rxjs/operators';
+import {
+  trace,
+  context,
+  SpanStatusCode,
+  Span,
+  SpanAttributes,
+} from '@opentelemetry/api';
 import { Reflector } from '@nestjs/core';
 import { TRACE_KEY } from '../decorators/trace.decorator';
 
@@ -32,41 +39,65 @@ export class TraceInterceptor implements NestInterceptor {
   intercept(
     executionContext: ExecutionContext,
     next: CallHandler,
-  ): Observable<any> {
+  ): Observable<unknown> {
     const spanName =
-      this.reflector.get(TRACE_KEY, executionContext.getHandler()) ||
+      this.reflector.get<string>(TRACE_KEY, executionContext.getHandler()) ||
       `${executionContext.getClass().name}.${executionContext.getHandler().name}`;
 
-    return new Observable((subscriber) => {
-      this.tracer.startActiveSpan(spanName, (span) => {
-        const traceContext = this.getTraceContext();
+    const activeSpan = trace.getSpan(context.active());
+    const ctx = activeSpan
+      ? trace.setSpan(context.active(), activeSpan)
+      : context.active();
 
-        // Log method entry
-        this.logger.log(`Entering ${spanName}`, traceContext);
+    return new Observable((subscriber) => {
+      this.tracer.startActiveSpan(spanName, {}, ctx, (span: Span) => {
+        const traceContext = this.getTraceContext();
+        const attributes: SpanAttributes = {
+          method: executionContext.getHandler().name,
+          class: executionContext.getClass().name,
+        };
+
+        span.setAttributes(attributes);
+
+        this.logger.log(`Entering ${spanName}`, {
+          ...traceContext,
+          ...attributes,
+        });
 
         next
           .handle()
           .pipe(
             tap({
               next: (value) => {
-                // Log successful execution
-                this.logger.log(
-                  `Successfully executed ${spanName}`,
-                  traceContext,
-                );
+                this.logger.log(`Successfully executed ${spanName}`, {
+                  ...traceContext,
+                  ...attributes,
+                });
                 span.setStatus({ code: SpanStatusCode.OK });
+                span.end();
                 subscriber.next(value);
                 subscriber.complete();
               },
-              error: (error) => {
-                // Log error
-                span.setStatus({ code: SpanStatusCode.ERROR });
-                this.logger.error(`Error in ${spanName}`, {
-                  error: error instanceof Error ? error.stack : error,
-                  ...traceContext,
-                });
-                subscriber.error(error);
-              },
+            }),
+            catchError((error: Error | HttpException) => {
+              this.logger.error(`Error in ${spanName}`, {
+                error: error instanceof Error ? error.stack : error,
+                ...traceContext,
+                ...attributes,
+              });
+
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: error instanceof Error ? error.message : String(error),
+              });
+
+              if (error instanceof Error) {
+                span.recordException(error);
+              }
+
+              span.end();
+              subscriber.error(error);
+              return throwError(() => error);
             }),
           )
           .subscribe();
